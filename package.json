@@ -16,13 +16,13 @@
     "@react-navigation/native-stack": "7.16.0",
     "babel-preset-expo": "~55.0.8",
     "expo": "55.0.26",
+    "expo-sqlite": "~55.0.16",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "react-native": "0.83.6",
     "react-native-safe-area-context": "~5.6.2",
     "react-native-screens": "~4.23.0",
-    "react-native-web": "^0.21.0",
-    "undefined": "/home/yasu/project/01-expense-tracker"
+    "react-native-web": "^0.21.0"
   },
   "devDependencies": {
     "@types/jest": "29.5.14",

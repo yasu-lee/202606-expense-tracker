@@ -30,4 +30,8 @@ export class ExpenseService {
   async createExpenseWithShares(input: CreateExpenseInput) {
     return this.repository.createExpenseWithShares(input);
   }
+
+  async updateShareSettlement(shareId: string, settledAmountKRW: number) {
+    return this.repository.updateShareSettlement(shareId, settledAmountKRW);
+  }
 }

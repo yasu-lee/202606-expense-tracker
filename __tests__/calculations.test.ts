@@ -1,5 +1,6 @@
 import { buildMonthlySummary, calculateCategoryActualSummary } from '../src/domain/calculations';
 import { validateCreateExpenseInput } from '../src/domain/validation';
+import { deriveSettlementStatus } from '../src/domain/settlement';
 import { splitDirect, splitEqual } from '../src/domain/split';
 import { Expense, ExpenseShare } from '../src/domain/types';
 import { MockExpenseRepository } from '../src/repositories/mock/mockExpenseRepository';
@@ -201,6 +202,52 @@ describe('expense creation', () => {
     });
   });
 
+});
+
+describe('settlement updates', () => {
+  it('derives settlement status from settled amount', () => {
+    expect(deriveSettlementStatus(5600, 0)).toBe('PENDING');
+    expect(deriveSettlementStatus(5600, 3000)).toBe('PARTIAL');
+    expect(deriveSettlementStatus(5600, 5600)).toBe('DONE');
+    expect(() => deriveSettlementStatus(5600, 5601)).toThrow(/cannot exceed/);
+  });
+
+  it('updates share settlement through mock repository and preserves paid and actual spent totals', async () => {
+    const repository = new MockExpenseRepository({ expenses: [], shares: [] });
+    const created = await repository.createExpenseWithShares({
+      title: '대신 결제한 커피',
+      amountKRW: 5600,
+      categoryId: 'cafe',
+      date: '2026-06-06',
+      paidBy: 'user-minji',
+      type: 'SHARED',
+      context: 'MEETING',
+      participantIds: ['user-jisoo'],
+      splitMethod: 'EQUAL',
+    });
+    const shareId = created.shares[0]?.id;
+    expect(shareId).toBeDefined();
+
+    await repository.updateShareSettlement(shareId ?? '', 3000);
+    const partialExpenses = await repository.listExpensesByMonth(month);
+    const partialShares = await repository.listSharesByExpenseIds([created.expense.id]);
+    expect(partialShares[0]).toMatchObject({ settlementStatus: 'PARTIAL', settledAmountKRW: 3000 });
+    expect(buildMonthlySummary(partialExpenses, partialShares, 'user-minji', month)).toMatchObject({
+      totalPaidKRW: 5600,
+      actualSpentKRW: 0,
+      receivableKRW: 2600,
+    });
+
+    await repository.updateShareSettlement(shareId ?? '', 5600);
+    const doneExpenses = await repository.listExpensesByMonth(month);
+    const doneShares = await repository.listSharesByExpenseIds([created.expense.id]);
+    expect(doneShares[0]).toMatchObject({ settlementStatus: 'DONE', settledAmountKRW: 5600 });
+    expect(buildMonthlySummary(doneExpenses, doneShares, 'user-minji', month)).toMatchObject({
+      totalPaidKRW: 5600,
+      actualSpentKRW: 0,
+      receivableKRW: 0,
+    });
+  });
 });
 
 describe('monthly calculations', () => {

@@ -1,5 +1,8 @@
+import { Platform } from 'react-native';
 import { ExpenseRepository } from '../repositories/ExpenseRepository';
 import { MockExpenseRepository } from '../repositories/mock/mockExpenseRepository';
+import { openExpenseDatabase } from '../repositories/sqlite/sqliteDatabase';
+import { SQLiteExpenseRepository } from '../repositories/sqlite/SQLiteExpenseRepository';
 import { ExpenseService } from './expenseService';
 import { SummaryService } from './summaryService';
 
@@ -13,4 +16,7 @@ export const createAppServices = (repository: ExpenseRepository = new MockExpens
   summaryService: new SummaryService(repository),
 });
 
-export const appServices = createAppServices();
+export const createPersistentAppServices = async (): Promise<AppServices> => {
+  const db = await openExpenseDatabase(undefined, Platform.OS);
+  return createAppServices(new SQLiteExpenseRepository(db, Platform.OS));
+};

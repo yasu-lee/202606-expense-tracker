@@ -4,10 +4,12 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { HomeScreen } from '../screens/HomeScreen';
 import { ExpenseListScreen } from '../screens/ExpenseListScreen';
 import { ExpenseFormScreen } from '../screens/ExpenseFormScreen';
+import { ExpenseDetailScreen } from '../screens/ExpenseDetailScreen';
 
 export type RootStackParamList = {
   Tabs: undefined;
   AddExpense: undefined;
+  ExpenseDetail: { expenseId: string };
 };
 
 export type TabParamList = {
@@ -36,6 +38,7 @@ export const AppNavigator = () => (
     <Stack.Navigator>
       <Stack.Screen name="Tabs" component={Tabs} options={{ headerShown: false }} />
       <Stack.Screen name="AddExpense" component={ExpenseFormScreen} options={{ title: '지출 추가', presentation: 'modal' }} />
+      <Stack.Screen name="ExpenseDetail" component={ExpenseDetailScreen} options={{ title: '정산 상세', presentation: 'modal' }} />
     </Stack.Navigator>
   </NavigationContainer>
 );

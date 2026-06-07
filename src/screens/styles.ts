@@ -20,8 +20,11 @@ export const styles = StyleSheet.create({
   chipText: { fontSize: 13, fontWeight: '700', color: '#334155' },
   badge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, backgroundColor: '#e0f2fe' },
   badgeShared: { backgroundColor: '#fef3c7' },
+  badgeDone: { backgroundColor: '#dcfce7' },
   badgeText: { fontSize: 12, fontWeight: '800', color: '#0f172a' },
   input: { backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12, fontSize: 16 },
   sectionTitle: { fontSize: 18, fontWeight: '800', color: '#0f172a' },
   error: { color: '#dc2626', fontWeight: '700' },
+  shareBlock: { borderTopWidth: 1, borderTopColor: '#e2e8f0', paddingTop: 12, gap: 10 },
+  settlementControls: { gap: 10 },
 });

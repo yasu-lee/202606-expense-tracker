@@ -1,5 +1,6 @@
 import { dummyCategories, dummyExpenseShares, dummyExpenses, dummyUsers, mockCurrentUser } from '../../domain/dummyData';
 import { buildExpenseWithShares } from '../../domain/expenseFactory';
+import { applySettlementAmount } from '../../domain/settlement';
 import { CreateExpenseInput, Expense, ExpenseShare } from '../../domain/types';
 import { ExpenseRepository } from '../ExpenseRepository';
 
@@ -45,5 +46,20 @@ export class MockExpenseRepository implements ExpenseRepository {
     this.shares = [...aggregate.shares, ...this.shares];
 
     return clone(aggregate);
+  }
+
+  async updateShareSettlement(shareId: string, settledAmountKRW: number) {
+    const shareIndex = this.shares.findIndex((share) => share.id === shareId);
+    if (shareIndex < 0) {
+      throw new Error('Expense share not found.');
+    }
+
+    const currentShare = this.shares[shareIndex];
+    if (!currentShare) {
+      throw new Error('Expense share not found.');
+    }
+    const updatedShare = applySettlementAmount(currentShare, settledAmountKRW);
+    this.shares = this.shares.map((share) => (share.id === shareId ? updatedShare : share));
+    return clone(updatedShare);
   }
 }

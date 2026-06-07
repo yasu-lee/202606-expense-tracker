@@ -27,7 +27,7 @@ export const ExpenseListScreen = () => {
       </View>
 
       {rows.map((row) => (
-        <View key={row.id} style={styles.card}>
+        <Pressable key={row.id} style={styles.card} onPress={() => navigation.navigate('ExpenseDetail', { expenseId: row.id })}>
           <View style={styles.row}>
             <View style={[styles.badge, row.typeLabel === '공유' ? styles.badgeShared : undefined]}>
               <Text style={styles.badgeText}>{row.typeLabel}</Text>
@@ -42,7 +42,7 @@ export const ExpenseListScreen = () => {
             </View>
             <Text style={styles.smallAmount}>{formatKRW(row.amountKRW)}</Text>
           </View>
-        </View>
+        </Pressable>
       ))}
     </ScrollView>
   );

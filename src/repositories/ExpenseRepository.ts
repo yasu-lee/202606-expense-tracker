@@ -7,4 +7,5 @@ export interface ExpenseRepository {
   listExpensesByMonth(month: string): Promise<Expense[]>;
   listSharesByExpenseIds(expenseIds: string[]): Promise<ExpenseShare[]>;
   createExpenseWithShares(input: CreateExpenseInput): Promise<{ expense: Expense; shares: ExpenseShare[] }>;
+  updateShareSettlement(shareId: string, settledAmountKRW: number): Promise<ExpenseShare>;
 }

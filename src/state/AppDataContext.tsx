@@ -15,6 +15,7 @@ type AppDataContextValue = {
   error: string | null;
   refresh: () => Promise<void>;
   createExpense: (input: CreateExpenseInput) => Promise<void>;
+  updateShareSettlement: (shareId: string, settledAmountKRW: number) => Promise<void>;
 };
 
 const AppDataContext = createContext<AppDataContextValue | undefined>(undefined);
@@ -60,13 +61,21 @@ export const AppDataProvider = ({ children, services }: AppDataProviderProps) =>
     [refresh, services],
   );
 
+  const updateShareSettlement = useCallback(
+    async (shareId: string, settledAmountKRW: number) => {
+      await services.expenseService.updateShareSettlement(shareId, settledAmountKRW);
+      await refresh();
+    },
+    [refresh, services],
+  );
+
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
   const value = useMemo(
-    () => ({ month, currentUser, users, categories, expenses, summary, error, refresh, createExpense }),
-    [month, currentUser, users, categories, expenses, summary, error, refresh, createExpense],
+    () => ({ month, currentUser, users, categories, expenses, summary, error, refresh, createExpense, updateShareSettlement }),
+    [month, currentUser, users, categories, expenses, summary, error, refresh, createExpense, updateShareSettlement],
   );
 
   return <AppDataContext.Provider value={value}>{children}</AppDataContext.Provider>;
