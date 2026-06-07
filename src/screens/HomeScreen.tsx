@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/AppNavigator';
+import { toHomeRecentExpenseView } from '../services/expenseViewService';
 import { useAppData } from '../state/AppDataContext';
 import { formatKRW } from '../utils/format';
 import { styles } from './styles';
@@ -15,6 +16,8 @@ export const HomeScreen = () => {
   const [basis, setBasis] = useState<'paid' | 'actual'>('actual');
 
   const heroAmount = basis === 'paid' ? summary?.totalPaidKRW ?? 0 : summary?.actualSpentKRW ?? 0;
+  const recentExpenseRows =
+    currentUser && summary ? summary.recentExpenses.map((expense) => toHomeRecentExpenseView(expense, currentUser.id, basis)) : [];
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.container}>
@@ -74,14 +77,19 @@ export const HomeScreen = () => {
 
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>최근 지출</Text>
-        {summary?.recentExpenses.map((expense) => (
-          <View key={expense.id} style={styles.row}>
+        {recentExpenseRows.length === 0 ? <Text style={styles.label}>최근 지출이 없습니다.</Text> : null}
+        {recentExpenseRows.map((expense) => (
+          <Pressable key={expense.id} style={styles.listRow} onPress={() => navigation.navigate('ExpenseDetail', { expenseId: expense.id })}>
             <View>
               <Text style={styles.smallAmount}>{expense.title}</Text>
-              <Text style={styles.label}>{expense.date} · {expense.type === 'PERSONAL' ? '개인' : '공유'}</Text>
+              <Text style={styles.label}>{expense.date} · {expense.typeLabel}</Text>
+              {expense.settlementHint ? <Text style={styles.metaText}>{expense.settlementHint}</Text> : null}
             </View>
-            <Text style={styles.smallAmount}>{formatKRW(expense.amountKRW)}</Text>
-          </View>
+            <View style={styles.amountColumn}>
+              <Text style={styles.label}>{expense.representativeLabel}</Text>
+              <Text style={styles.smallAmount}>{formatKRW(expense.representativeAmountKRW)}</Text>
+            </View>
+          </Pressable>
         ))}
       </View>
 

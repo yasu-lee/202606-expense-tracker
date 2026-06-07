@@ -1,7 +1,8 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
-import { buildExpenseWithShares } from '../../domain/expenseFactory';
+import { dummyExpenseShares, dummyExpenses } from '../../domain/dummyData';
+import { buildExpenseWithShares, buildUpdatedExpenseWithShares } from '../../domain/expenseFactory';
 import { applySettlementAmount } from '../../domain/settlement';
-import { Category, CreateExpenseInput, Expense, ExpenseShare, User } from '../../domain/types';
+import { Category, CreateExpenseInput, Expense, ExpenseId, ExpenseShare, UpdateExpenseInput, User } from '../../domain/types';
 import { ExpenseRepository } from '../ExpenseRepository';
 import { runSQLiteTransactionForPlatform } from './sqliteTransaction';
 
@@ -31,7 +32,15 @@ type ExpenseShareRow = {
   created_at: string;
 };
 
+type SQLiteTransactionRunner = Pick<SQLiteDatabase, 'execAsync' | 'runAsync' | 'getFirstAsync' | 'getAllAsync'>;
+type UpdatedExpenseAggregate = ReturnType<typeof buildUpdatedExpenseWithShares>;
+
 const createId = (prefix: string): string => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const assertDevelopmentResetAllowed = (): void => {
+  if (typeof __DEV__ !== 'undefined' && !__DEV__) {
+    throw new Error('Development data reset is only available in development builds.');
+  }
+};
 
 const toUser = (row: UserRow): User => ({
   id: row.id,
@@ -69,6 +78,69 @@ const toExpenseShare = (row: ExpenseShareRow): ExpenseShare => ({
   settledAmountKRW: row.settled_amount_krw,
   createdAt: row.created_at,
 });
+
+const insertExpense = async (
+  db: Pick<SQLiteDatabase, 'runAsync'>,
+  expense: Expense,
+): Promise<void> => {
+  await db.runAsync(
+    `INSERT INTO expenses (
+      id, title, amount_krw, currency, category_id, date, paid_by, type, context, memo, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    expense.id,
+    expense.title,
+    expense.amountKRW,
+    expense.currency,
+    expense.categoryId,
+    expense.date,
+    expense.paidBy,
+    expense.type,
+    expense.context,
+    expense.memo ?? null,
+    expense.createdAt,
+    expense.updatedAt,
+  );
+};
+
+const updateExpenseRow = async (
+  db: Pick<SQLiteDatabase, 'runAsync'>,
+  expense: Expense,
+): Promise<void> => {
+  await db.runAsync(
+    `UPDATE expenses
+     SET title = ?, amount_krw = ?, currency = ?, category_id = ?, date = ?, paid_by = ?, type = ?, context = ?, memo = ?, updated_at = ?
+     WHERE id = ?`,
+    expense.title,
+    expense.amountKRW,
+    expense.currency,
+    expense.categoryId,
+    expense.date,
+    expense.paidBy,
+    expense.type,
+    expense.context,
+    expense.memo ?? null,
+    expense.updatedAt,
+    expense.id,
+  );
+};
+
+const insertShare = async (
+  db: Pick<SQLiteDatabase, 'runAsync'>,
+  share: ExpenseShare,
+): Promise<void> => {
+  await db.runAsync(
+    `INSERT INTO expense_shares (
+      id, expense_id, user_id, share_amount_krw, settlement_status, settled_amount_krw, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    share.id,
+    share.expenseId,
+    share.userId,
+    share.shareAmountKRW,
+    share.settlementStatus,
+    share.settledAmountKRW,
+    share.createdAt,
+  );
+};
 
 export class SQLiteExpenseRepository implements ExpenseRepository {
   constructor(private readonly db: SQLiteDatabase, private readonly platformOS: string = 'native') {}
@@ -117,46 +189,69 @@ export class SQLiteExpenseRepository implements ExpenseRepository {
     return rows.map(toExpenseShare);
   }
 
+  private async getExpenseById(db: Pick<SQLiteDatabase, 'getFirstAsync'>, expenseId: ExpenseId) {
+    const row = await db.getFirstAsync<ExpenseRow>(
+      `SELECT id, title, amount_krw, currency, category_id, date, paid_by, type, context, memo, created_at, updated_at
+       FROM expenses
+       WHERE id = ?`,
+      expenseId,
+    );
+    return row ? toExpense(row) : null;
+  }
+
   async createExpenseWithShares(input: CreateExpenseInput) {
     const currentUser = await this.getCurrentUser();
     const aggregate = buildExpenseWithShares(input, currentUser.id, new Date().toISOString(), createId);
 
     await runSQLiteTransactionForPlatform(this.db, this.platformOS, async (txn) => {
-      await txn.runAsync(
-        `INSERT INTO expenses (
-          id, title, amount_krw, currency, category_id, date, paid_by, type, context, memo, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        aggregate.expense.id,
-        aggregate.expense.title,
-        aggregate.expense.amountKRW,
-        aggregate.expense.currency,
-        aggregate.expense.categoryId,
-        aggregate.expense.date,
-        aggregate.expense.paidBy,
-        aggregate.expense.type,
-        aggregate.expense.context,
-        aggregate.expense.memo ?? null,
-        aggregate.expense.createdAt,
-        aggregate.expense.updatedAt,
-      );
+      await insertExpense(txn, aggregate.expense);
 
       for (const share of aggregate.shares) {
-        await txn.runAsync(
-          `INSERT INTO expense_shares (
-            id, expense_id, user_id, share_amount_krw, settlement_status, settled_amount_krw, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          share.id,
-          share.expenseId,
-          share.userId,
-          share.shareAmountKRW,
-          share.settlementStatus,
-          share.settledAmountKRW,
-          share.createdAt,
-        );
+        await insertShare(txn, share);
       }
     });
 
     return aggregate;
+  }
+
+  async updateExpenseWithShares(input: UpdateExpenseInput) {
+    const currentUser = await this.getCurrentUser();
+    let aggregate: UpdatedExpenseAggregate | undefined;
+
+    await runSQLiteTransactionForPlatform(this.db, this.platformOS, async (txn) => {
+      const existingExpense = await this.getExpenseById(txn, input.expenseId);
+      if (!existingExpense) {
+        throw new Error('Expense not found.');
+      }
+      const existingShares = await this.listSharesByExpenseIdsWithRunner(txn, [input.expenseId]);
+      aggregate = buildUpdatedExpenseWithShares(input, existingExpense, existingShares, currentUser.id, new Date().toISOString(), createId);
+
+      await updateExpenseRow(txn, aggregate.expense);
+      if (aggregate.financialEdit) {
+        await txn.runAsync('DELETE FROM expense_shares WHERE expense_id = ?', input.expenseId);
+        for (const share of aggregate.shares) {
+          await insertShare(txn, share);
+        }
+      }
+    });
+
+    const updatedAggregate = aggregate;
+    if (!updatedAggregate) {
+      throw new Error('Expense not found.');
+    }
+    return { expense: updatedAggregate.expense, shares: updatedAggregate.shares };
+  }
+
+  async deleteExpense(expenseId: ExpenseId) {
+    let changes = 0;
+    await runSQLiteTransactionForPlatform(this.db, this.platformOS, async (txn) => {
+      await txn.runAsync('DELETE FROM expense_shares WHERE expense_id = ?', expenseId);
+      const result = await txn.runAsync('DELETE FROM expenses WHERE id = ?', expenseId);
+      changes = result.changes;
+    });
+    if (changes === 0) {
+      throw new Error('Expense not found.');
+    }
   }
 
   async updateShareSettlement(shareId: string, settledAmountKRW: number) {
@@ -178,5 +273,36 @@ export class SQLiteExpenseRepository implements ExpenseRepository {
       updatedShare.id,
     );
     return updatedShare;
+  }
+
+  async resetDevelopmentData() {
+    assertDevelopmentResetAllowed();
+    await runSQLiteTransactionForPlatform(this.db, this.platformOS, async (txn) => {
+      await txn.runAsync('DELETE FROM expense_shares');
+      await txn.runAsync('DELETE FROM expenses');
+
+      for (const expense of dummyExpenses) {
+        await insertExpense(txn, expense);
+      }
+
+      for (const share of dummyExpenseShares) {
+        await insertShare(txn, share);
+      }
+    });
+  }
+
+  private async listSharesByExpenseIdsWithRunner(db: SQLiteTransactionRunner, expenseIds: string[]) {
+    if (expenseIds.length === 0) {
+      return [];
+    }
+    const placeholders = expenseIds.map(() => '?').join(', ');
+    const rows = await db.getAllAsync<ExpenseShareRow>(
+      `SELECT id, expense_id, user_id, share_amount_krw, settlement_status, settled_amount_krw, created_at
+       FROM expense_shares
+       WHERE expense_id IN (${placeholders})
+       ORDER BY rowid`,
+      ...expenseIds,
+    );
+    return rows.map(toExpenseShare);
   }
 }

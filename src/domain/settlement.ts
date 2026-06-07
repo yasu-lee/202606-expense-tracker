@@ -21,3 +21,15 @@ export const applySettlementAmount = (share: ExpenseShare, settledAmountKRW: num
   settledAmountKRW,
   settlementStatus: deriveSettlementStatus(share.shareAmountKRW, settledAmountKRW),
 });
+
+export const validatePartialSettlementAmount = (share: ExpenseShare, partialAmountKRW: number): void => {
+  if (!Number.isInteger(partialAmountKRW)) {
+    throw new Error('부분 정산액은 숫자로 입력해 주세요.');
+  }
+  if (partialAmountKRW <= 0) {
+    throw new Error('부분 정산액은 0원보다 커야 합니다.');
+  }
+  if (partialAmountKRW > Math.max(share.shareAmountKRW - share.settledAmountKRW, 0)) {
+    throw new Error('부분 정산액은 남은 정산금보다 클 수 없습니다.');
+  }
+};

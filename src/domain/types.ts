@@ -74,6 +74,10 @@ export type CreateExpenseInput = {
   directShares?: DirectShareInput[];
 };
 
+export type UpdateExpenseInput = CreateExpenseInput & {
+  expenseId: ExpenseId;
+};
+
 export type ExpenseWithShares = Expense & {
   shares: ExpenseShare[];
 };

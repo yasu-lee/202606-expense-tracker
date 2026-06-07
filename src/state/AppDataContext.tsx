@@ -1,5 +1,5 @@
 import React, { createContext, PropsWithChildren, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { CreateExpenseInput, ExpenseWithShares, MonthlySummaryView, User, Category } from '../domain/types';
+import { CreateExpenseInput, ExpenseId, ExpenseWithShares, MonthlySummaryView, User, Category, UpdateExpenseInput } from '../domain/types';
 import { AppServices } from '../services/appServices';
 import { toLocalMonthKey } from '../utils/date';
 
@@ -15,7 +15,10 @@ type AppDataContextValue = {
   error: string | null;
   refresh: () => Promise<void>;
   createExpense: (input: CreateExpenseInput) => Promise<void>;
+  updateExpense: (input: UpdateExpenseInput) => Promise<void>;
+  deleteExpense: (expenseId: ExpenseId) => Promise<void>;
   updateShareSettlement: (shareId: string, settledAmountKRW: number) => Promise<void>;
+  resetDevelopmentData: () => Promise<void>;
 };
 
 const AppDataContext = createContext<AppDataContextValue | undefined>(undefined);
@@ -61,6 +64,22 @@ export const AppDataProvider = ({ children, services }: AppDataProviderProps) =>
     [refresh, services],
   );
 
+  const updateExpense = useCallback(
+    async (input: UpdateExpenseInput) => {
+      await services.expenseService.updateExpenseWithShares(input);
+      await refresh();
+    },
+    [refresh, services],
+  );
+
+  const deleteExpense = useCallback(
+    async (expenseId: ExpenseId) => {
+      await services.expenseService.deleteExpense(expenseId);
+      await refresh();
+    },
+    [refresh, services],
+  );
+
   const updateShareSettlement = useCallback(
     async (shareId: string, settledAmountKRW: number) => {
       await services.expenseService.updateShareSettlement(shareId, settledAmountKRW);
@@ -69,13 +88,46 @@ export const AppDataProvider = ({ children, services }: AppDataProviderProps) =>
     [refresh, services],
   );
 
+  const resetDevelopmentData = useCallback(async () => {
+    await services.expenseService.resetDevelopmentData();
+    await refresh();
+  }, [refresh, services]);
+
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
   const value = useMemo(
-    () => ({ month, currentUser, users, categories, expenses, summary, error, refresh, createExpense, updateShareSettlement }),
-    [month, currentUser, users, categories, expenses, summary, error, refresh, createExpense, updateShareSettlement],
+    () => ({
+      month,
+      currentUser,
+      users,
+      categories,
+      expenses,
+      summary,
+      error,
+      refresh,
+      createExpense,
+      updateExpense,
+      deleteExpense,
+      updateShareSettlement,
+      resetDevelopmentData,
+    }),
+    [
+      month,
+      currentUser,
+      users,
+      categories,
+      expenses,
+      summary,
+      error,
+      refresh,
+      createExpense,
+      updateExpense,
+      deleteExpense,
+      updateShareSettlement,
+      resetDevelopmentData,
+    ],
   );
 
   return <AppDataContext.Provider value={value}>{children}</AppDataContext.Provider>;

@@ -8,7 +8,7 @@ import { ExpenseDetailScreen } from '../screens/ExpenseDetailScreen';
 
 export type RootStackParamList = {
   Tabs: undefined;
-  AddExpense: undefined;
+  AddExpense: { expenseId?: string } | undefined;
   ExpenseDetail: { expenseId: string };
 };
 
@@ -37,7 +37,11 @@ export const AppNavigator = () => (
   <NavigationContainer>
     <Stack.Navigator>
       <Stack.Screen name="Tabs" component={Tabs} options={{ headerShown: false }} />
-      <Stack.Screen name="AddExpense" component={ExpenseFormScreen} options={{ title: '지출 추가', presentation: 'modal' }} />
+      <Stack.Screen
+        name="AddExpense"
+        component={ExpenseFormScreen}
+        options={({ route }) => ({ title: route.params?.expenseId ? '지출 수정' : '지출 추가', presentation: 'modal' })}
+      />
       <Stack.Screen name="ExpenseDetail" component={ExpenseDetailScreen} options={{ title: '정산 상세', presentation: 'modal' }} />
     </Stack.Navigator>
   </NavigationContainer>

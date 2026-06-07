@@ -1,4 +1,4 @@
-import { CreateExpenseInput, ExpenseWithShares } from '../domain/types';
+import { CreateExpenseInput, ExpenseId, ExpenseWithShares, UpdateExpenseInput } from '../domain/types';
 import { ExpenseRepository } from '../repositories/ExpenseRepository';
 
 export class ExpenseService {
@@ -31,7 +31,22 @@ export class ExpenseService {
     return this.repository.createExpenseWithShares(input);
   }
 
+  async updateExpenseWithShares(input: UpdateExpenseInput) {
+    return this.repository.updateExpenseWithShares(input);
+  }
+
+  async deleteExpense(expenseId: ExpenseId) {
+    return this.repository.deleteExpense(expenseId);
+  }
+
   async updateShareSettlement(shareId: string, settledAmountKRW: number) {
     return this.repository.updateShareSettlement(shareId, settledAmountKRW);
+  }
+
+  async resetDevelopmentData() {
+    if (!__DEV__) {
+      throw new Error('Development data reset is only available in development builds.');
+    }
+    return this.repository.resetDevelopmentData();
   }
 }

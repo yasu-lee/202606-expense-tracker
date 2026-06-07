@@ -1,9 +1,10 @@
 import { buildMonthlySummary, calculateCategoryActualSummary } from '../src/domain/calculations';
 import { validateCreateExpenseInput } from '../src/domain/validation';
-import { deriveSettlementStatus } from '../src/domain/settlement';
+import { deriveSettlementStatus, validatePartialSettlementAmount } from '../src/domain/settlement';
 import { splitDirect, splitEqual } from '../src/domain/split';
 import { Expense, ExpenseShare } from '../src/domain/types';
 import { MockExpenseRepository } from '../src/repositories/mock/mockExpenseRepository';
+import { toHomeRecentExpenseView } from '../src/services/expenseViewService';
 
 const month = '2026-06';
 const me = 'me';
@@ -248,6 +249,182 @@ describe('settlement updates', () => {
       receivableKRW: 0,
     });
   });
+
+  it('rejects invalid partial settlement amounts against remaining amount', () => {
+    const pendingShare = share({ shareAmountKRW: 5600, settledAmountKRW: 3000, settlementStatus: 'PARTIAL' });
+
+    expect(() => validatePartialSettlementAmount(pendingShare, 0)).toThrow(/0원보다 커야/);
+    expect(() => validatePartialSettlementAmount(pendingShare, -1)).toThrow(/0원보다 커야/);
+    expect(() => validatePartialSettlementAmount(pendingShare, 2601)).toThrow(/남은 정산금/);
+    expect(() => validatePartialSettlementAmount(pendingShare, 2600)).not.toThrow();
+  });
+
+  it('rolls DONE settlement back to PENDING and restores receivable without changing paid or actual spent', async () => {
+    const repository = new MockExpenseRepository({ expenses: [], shares: [] });
+    const created = await repository.createExpenseWithShares({
+      title: '정산 되돌릴 커피',
+      amountKRW: 5600,
+      categoryId: 'cafe',
+      date: '2026-06-06',
+      paidBy: 'user-minji',
+      type: 'SHARED',
+      context: 'MEETING',
+      participantIds: ['user-jisoo'],
+      splitMethod: 'EQUAL',
+    });
+    const shareId = created.shares[0]?.id ?? '';
+
+    await repository.updateShareSettlement(shareId, 5600);
+    const doneExpenses = await repository.listExpensesByMonth(month);
+    const doneShares = await repository.listSharesByExpenseIds([created.expense.id]);
+    expect(buildMonthlySummary(doneExpenses, doneShares, 'user-minji', month)).toMatchObject({
+      totalPaidKRW: 5600,
+      actualSpentKRW: 0,
+      receivableKRW: 0,
+    });
+
+    await repository.updateShareSettlement(shareId, 0);
+    const rolledBackExpenses = await repository.listExpensesByMonth(month);
+    const rolledBackShares = await repository.listSharesByExpenseIds([created.expense.id]);
+    expect(rolledBackShares[0]).toMatchObject({ settlementStatus: 'PENDING', settledAmountKRW: 0 });
+    expect(buildMonthlySummary(rolledBackExpenses, rolledBackShares, 'user-minji', month)).toMatchObject({
+      totalPaidKRW: 5600,
+      actualSpentKRW: 0,
+      receivableKRW: 5600,
+    });
+  });
+});
+
+describe('expense updates and deletion', () => {
+  it('updates a personal expense and refreshes summary totals', async () => {
+    const repository = new MockExpenseRepository({ expenses: [], shares: [] });
+    const created = await repository.createExpenseWithShares({
+      title: '개인 점심',
+      amountKRW: 9000,
+      categoryId: 'food',
+      date: '2026-06-06',
+      paidBy: 'ignored',
+      type: 'PERSONAL',
+      participantIds: ['ignored'],
+      splitMethod: 'EQUAL',
+    });
+
+    await repository.updateExpenseWithShares({
+      expenseId: created.expense.id,
+      title: '개인 점심 수정',
+      amountKRW: 12000,
+      categoryId: 'food',
+      date: '2026-06-06',
+      paidBy: 'ignored',
+      type: 'PERSONAL',
+      participantIds: ['ignored'],
+      splitMethod: 'EQUAL',
+    });
+
+    const expenses = await repository.listExpensesByMonth(month);
+    const shares = await repository.listSharesByExpenseIds([created.expense.id]);
+    expect(shares[0]).toMatchObject({ userId: 'user-minji', shareAmountKRW: 12000, settlementStatus: 'DONE' });
+    expect(buildMonthlySummary(expenses, shares, 'user-minji', month)).toMatchObject({
+      totalPaidKRW: 12000,
+      actualSpentKRW: 12000,
+      receivableKRW: 0,
+      payableKRW: 0,
+    });
+  });
+
+  it('recalculates shares when shared expense amount changes', async () => {
+    const repository = new MockExpenseRepository({ expenses: [], shares: [] });
+    const created = await repository.createExpenseWithShares({
+      title: '공유 간식',
+      amountKRW: 10000,
+      categoryId: 'food',
+      date: '2026-06-06',
+      paidBy: 'user-minji',
+      type: 'SHARED',
+      context: 'MEETING',
+      participantIds: ['user-minji', 'user-jisoo'],
+      splitMethod: 'EQUAL',
+    });
+
+    await repository.updateShareSettlement(created.shares.find((item) => item.userId === 'user-jisoo')?.id ?? '', 5000);
+    const updated = await repository.updateExpenseWithShares({
+      expenseId: created.expense.id,
+      title: '공유 간식',
+      amountKRW: 12000,
+      categoryId: 'food',
+      date: '2026-06-06',
+      paidBy: 'user-minji',
+      type: 'SHARED',
+      context: 'MEETING',
+      participantIds: ['user-minji', 'user-jisoo'],
+      splitMethod: 'EQUAL',
+    });
+
+    expect(updated.shares.map((item) => item.shareAmountKRW)).toEqual([6000, 6000]);
+    expect(updated.shares.find((item) => item.userId === 'user-jisoo')).toMatchObject({ settlementStatus: 'PENDING', settledAmountKRW: 0 });
+  });
+
+  it('preserves settlement for metadata-only updates', async () => {
+    const repository = new MockExpenseRepository({ expenses: [], shares: [] });
+    const created = await repository.createExpenseWithShares({
+      title: '메타데이터 수정',
+      amountKRW: 5600,
+      categoryId: 'cafe',
+      date: '2026-06-06',
+      paidBy: 'user-minji',
+      type: 'SHARED',
+      context: 'MEETING',
+      participantIds: ['user-jisoo'],
+      splitMethod: 'EQUAL',
+    });
+    const shareId = created.shares[0]?.id ?? '';
+    await repository.updateShareSettlement(shareId, 3000);
+
+    const updated = await repository.updateExpenseWithShares({
+      expenseId: created.expense.id,
+      title: '메타데이터만 수정',
+      amountKRW: 5600,
+      categoryId: 'cafe',
+      date: '2026-06-07',
+      paidBy: 'user-minji',
+      type: 'SHARED',
+      context: 'MEETING',
+      participantIds: ['user-jisoo'],
+      splitMethod: 'EQUAL',
+      memo: '메모만 변경',
+    });
+
+    expect(updated.expense).toMatchObject({ id: created.expense.id, title: '메타데이터만 수정', createdAt: created.expense.createdAt });
+    expect(updated.shares[0]).toMatchObject({ id: shareId, settlementStatus: 'PARTIAL', settledAmountKRW: 3000 });
+  });
+
+  it('deletes an expense with shares and updates monthly summary', async () => {
+    const repository = new MockExpenseRepository({ expenses: [], shares: [] });
+    const created = await repository.createExpenseWithShares({
+      title: '삭제할 커피',
+      amountKRW: 5600,
+      categoryId: 'cafe',
+      date: '2026-06-06',
+      paidBy: 'user-minji',
+      type: 'SHARED',
+      context: 'MEETING',
+      participantIds: ['user-jisoo'],
+      splitMethod: 'EQUAL',
+    });
+
+    await repository.deleteExpense(created.expense.id);
+    const expenses = await repository.listExpensesByMonth(month);
+    const shares = await repository.listSharesByExpenseIds([created.expense.id]);
+
+    expect(expenses).toHaveLength(0);
+    expect(shares).toHaveLength(0);
+    expect(buildMonthlySummary(expenses, shares, 'user-minji', month)).toMatchObject({
+      totalPaidKRW: 0,
+      actualSpentKRW: 0,
+      receivableKRW: 0,
+      payableKRW: 0,
+    });
+  });
 });
 
 describe('monthly calculations', () => {
@@ -353,5 +530,78 @@ describe('monthly calculations', () => {
       receivableKRW: 0,
       payableKRW: 5600,
     });
+  });
+});
+
+describe('home recent expense view', () => {
+  it('uses current user ExpenseShare for actual-burden representative amount', () => {
+    const row = toHomeRecentExpenseView(
+      {
+        ...expense({
+          id: 'shared-coffee',
+          amountKRW: 5600,
+          paidBy: me,
+          type: 'SHARED',
+          context: 'MEETING',
+        }),
+        shares: [share({ id: 'friend-share', expenseId: 'shared-coffee', userId: friendA, shareAmountKRW: 5600 })],
+      },
+      me,
+      'actual',
+    );
+    expect(row.representativeAmountKRW).toBe(0);
+  });
+
+  it('uses paidBy for paid-basis representative amount', () => {
+    const sharedExpense = {
+      ...expense({
+        id: 'paid-by-me',
+        amountKRW: 5600,
+        paidBy: me,
+        type: 'SHARED',
+        context: 'MEETING',
+      }),
+      shares: [share({ id: 'friend-share', expenseId: 'paid-by-me', userId: friendA, shareAmountKRW: 5600 })],
+    };
+
+    expect(toHomeRecentExpenseView(sharedExpense, me, 'paid')).toMatchObject({
+      representativeAmountKRW: 5600,
+      representativeLabel: '결제',
+    });
+  });
+
+  it('shows zero actual burden when current user paid for someone else', () => {
+    const sharedExpense = {
+      ...expense({
+        id: 'coffee-for-friend',
+        amountKRW: 5600,
+        paidBy: me,
+        type: 'SHARED',
+        context: 'MEETING',
+      }),
+      shares: [share({ id: 'friend-share', expenseId: 'coffee-for-friend', userId: friendA, shareAmountKRW: 5600 })],
+    };
+
+    expect(toHomeRecentExpenseView(sharedExpense, me, 'actual')).toMatchObject({
+      representativeAmountKRW: 0,
+      representativeLabel: '내 부담',
+      myShareKRW: 0,
+    });
+  });
+
+  it('shows zero paid basis and share amount actual basis when someone else paid for current user', () => {
+    const sharedExpense = {
+      ...expense({
+        id: 'coffee-for-me',
+        amountKRW: 5600,
+        paidBy: friendA,
+        type: 'SHARED',
+        context: 'MEETING',
+      }),
+      shares: [share({ id: 'me-share', expenseId: 'coffee-for-me', userId: me, shareAmountKRW: 5600 })],
+    };
+
+    expect(toHomeRecentExpenseView(sharedExpense, me, 'paid')).toMatchObject({ representativeAmountKRW: 0 });
+    expect(toHomeRecentExpenseView(sharedExpense, me, 'actual')).toMatchObject({ representativeAmountKRW: 5600 });
   });
 });

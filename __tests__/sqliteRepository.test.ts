@@ -44,6 +44,9 @@ class FakeSQLiteDatabase {
     if (source.includes('FROM expense_shares') && source.includes('WHERE id = ?')) {
       return (this.shares.find((share) => share.id === params[0]) ?? null) as T | null;
     }
+    if (source.includes('FROM expenses') && source.includes('WHERE id = ?')) {
+      return (this.expenses.find((expense) => expense.id === params[0]) ?? null) as T | null;
+    }
     return null;
   }
 
@@ -100,6 +103,52 @@ class FakeSQLiteDatabase {
           ? { ...share, settlement_status: params[0] as ShareRow['settlement_status'], settled_amount_krw: Number(params[1]) }
           : share,
       );
+    }
+    if (source.includes('UPDATE expenses')) {
+      const expenseId = String(params[10]);
+      const before = this.expenses;
+      this.expenses = this.expenses.map((expense) =>
+        expense.id === expenseId
+          ? {
+              id: expense.id,
+              title: String(params[0]),
+              amount_krw: Number(params[1]),
+              currency: 'KRW',
+              category_id: String(params[3]),
+              date: String(params[4]),
+              paid_by: String(params[5]),
+              type: params[6] as ExpenseRow['type'],
+              context: params[7] as ExpenseRow['context'],
+              memo: params[8] === null ? null : String(params[8]),
+              created_at: expense.created_at,
+              updated_at: String(params[9]),
+            }
+          : expense,
+      );
+      return { changes: before.some((expense) => expense.id === expenseId) ? 1 : 0, lastInsertRowId: 0 };
+    }
+    if (source.includes('DELETE FROM expense_shares')) {
+      if (source.includes('WHERE expense_id = ?')) {
+        const expenseId = String(params[0]);
+        const before = this.shares.length;
+        this.shares = this.shares.filter((share) => share.expense_id !== expenseId);
+        return { changes: before - this.shares.length, lastInsertRowId: 0 };
+      }
+      const changes = this.shares.length;
+      this.shares = [];
+      return { changes, lastInsertRowId: 0 };
+    }
+    if (source.includes('DELETE FROM expenses')) {
+      if (source.includes('WHERE id = ?')) {
+        const expenseId = String(params[0]);
+        const before = this.expenses.length;
+        this.expenses = this.expenses.filter((expense) => expense.id !== expenseId);
+        this.shares = this.shares.filter((share) => share.expense_id !== expenseId);
+        return { changes: before - this.expenses.length, lastInsertRowId: 0 };
+      }
+      const changes = this.expenses.length;
+      this.expenses = [];
+      return { changes, lastInsertRowId: 0 };
     }
     return { changes: 1, lastInsertRowId: 0 };
   }
@@ -169,5 +218,122 @@ describe('SQLiteExpenseRepository contract', () => {
     });
 
     expect(calls).toEqual(['web']);
+  });
+
+  it('updates metadata without replacing settled shares', async () => {
+    const db = new FakeSQLiteDatabase();
+    const repository = new SQLiteExpenseRepository(db as never);
+    const created = await repository.createExpenseWithShares({
+      title: '수정 전 커피',
+      amountKRW: 5600,
+      categoryId: 'cafe',
+      date: '2026-06-06',
+      paidBy: 'user-minji',
+      type: 'SHARED',
+      context: 'MEETING',
+      participantIds: ['user-jisoo'],
+      splitMethod: 'EQUAL',
+    });
+    const shareId = created.shares[0]?.id ?? '';
+    await repository.updateShareSettlement(shareId, 3000);
+
+    const updated = await repository.updateExpenseWithShares({
+      expenseId: created.expense.id,
+      title: '수정 후 커피',
+      amountKRW: 5600,
+      categoryId: 'cafe',
+      date: '2026-06-07',
+      paidBy: 'user-minji',
+      type: 'SHARED',
+      context: 'MEETING',
+      participantIds: ['user-jisoo'],
+      splitMethod: 'EQUAL',
+    });
+
+    expect(updated.expense).toMatchObject({ id: created.expense.id, title: '수정 후 커피' });
+    expect(updated.shares[0]).toMatchObject({ id: shareId, settlementStatus: 'PARTIAL', settledAmountKRW: 3000 });
+    expect(db.shares).toHaveLength(1);
+  });
+
+  it('replaces shares for financial updates and deletes them with the expense', async () => {
+    const db = new FakeSQLiteDatabase();
+    const repository = new SQLiteExpenseRepository(db as never);
+    const created = await repository.createExpenseWithShares({
+      title: '공유 커피',
+      amountKRW: 5600,
+      categoryId: 'cafe',
+      date: '2026-06-06',
+      paidBy: 'user-minji',
+      type: 'SHARED',
+      context: 'MEETING',
+      participantIds: ['user-jisoo'],
+      splitMethod: 'EQUAL',
+    });
+    const oldShareId = created.shares[0]?.id;
+    await repository.updateShareSettlement(oldShareId ?? '', 3000);
+
+    const updated = await repository.updateExpenseWithShares({
+      expenseId: created.expense.id,
+      title: '공유 커피',
+      amountKRW: 7000,
+      categoryId: 'cafe',
+      date: '2026-06-06',
+      paidBy: 'user-minji',
+      type: 'SHARED',
+      context: 'MEETING',
+      participantIds: ['user-jisoo'],
+      splitMethod: 'EQUAL',
+    });
+
+    expect(updated.shares).toHaveLength(1);
+    expect(updated.shares[0]).toMatchObject({ shareAmountKRW: 7000, settlementStatus: 'PENDING', settledAmountKRW: 0 });
+    expect(updated.shares[0]?.id).not.toBe(oldShareId);
+    expect(db.shares).toHaveLength(1);
+
+    await repository.deleteExpense(created.expense.id);
+    expect(await repository.listExpensesByMonth('2026-06')).toHaveLength(0);
+    expect(await repository.listSharesByExpenseIds([created.expense.id])).toHaveLength(0);
+  });
+
+  it('uses web-safe repository transactions for update, delete, and reset', async () => {
+    const db = new FakeSQLiteDatabase();
+    const calls: string[] = [];
+    db.withExclusiveTransactionAsync = async () => {
+      calls.push('exclusive');
+      throw new Error('exclusive transaction should not run on web');
+    };
+    db.withTransactionAsync = async (task) => {
+      calls.push('web');
+      await task();
+    };
+    const repository = new SQLiteExpenseRepository(db as never, 'web');
+    const created = await repository.createExpenseWithShares({
+      title: '웹 트랜잭션',
+      amountKRW: 5600,
+      categoryId: 'cafe',
+      date: '2026-06-06',
+      paidBy: 'user-minji',
+      type: 'SHARED',
+      context: 'MEETING',
+      participantIds: ['user-jisoo'],
+      splitMethod: 'EQUAL',
+    });
+
+    await repository.updateExpenseWithShares({
+      expenseId: created.expense.id,
+      title: '웹 트랜잭션 수정',
+      amountKRW: 5600,
+      categoryId: 'cafe',
+      date: '2026-06-06',
+      paidBy: 'user-minji',
+      type: 'SHARED',
+      context: 'MEETING',
+      participantIds: ['user-jisoo'],
+      splitMethod: 'EQUAL',
+    });
+    await repository.deleteExpense(created.expense.id);
+    await repository.resetDevelopmentData();
+
+    expect(calls).toEqual(['web', 'web', 'web', 'web']);
   });
 });

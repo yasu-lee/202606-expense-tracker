@@ -1,20 +1,21 @@
-import { useNavigation } from '@react-navigation/native';
-import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useMemo, useState } from 'react';
+import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { RootStackParamList } from '../navigation/AppNavigator';
-import { CreateExpenseInput, SplitMethod, ExpenseType } from '../domain/types';
+import { isFinancialExpenseEdit } from '../domain/expenseFactory';
+import { CreateExpenseInput, SplitMethod, ExpenseType, UpdateExpenseInput } from '../domain/types';
 import { useAppData } from '../state/AppDataContext';
 import { toLocalDateKey } from '../utils/date';
 import { styles } from './styles';
 
-type Navigation = NativeStackNavigationProp<RootStackParamList>;
+type Props = NativeStackScreenProps<RootStackParamList, 'AddExpense'>;
 
 const TODAY = toLocalDateKey();
 
-export const ExpenseFormScreen = () => {
-  const navigation = useNavigation<Navigation>();
-  const { currentUser, users, categories, createExpense } = useAppData();
+export const ExpenseFormScreen = ({ navigation, route }: Props) => {
+  const { currentUser, users, categories, expenses, createExpense, updateExpense } = useAppData();
+  const editingExpense = expenses.find((expense) => expense.id === route.params?.expenseId);
+  const isEditMode = Boolean(route.params?.expenseId);
   const [type, setType] = useState<ExpenseType>('PERSONAL');
   const [splitMethod, setSplitMethod] = useState<SplitMethod>('EQUAL');
   const [title, setTitle] = useState('');
@@ -26,8 +27,33 @@ export const ExpenseFormScreen = () => {
   const [memo, setMemo] = useState('');
   const [directAmounts, setDirectAmounts] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
+  const [resetWarningAcknowledged, setResetWarningAcknowledged] = useState(false);
 
   const amountKRW = useMemo(() => Number(amountText.replace(/[^0-9]/g, '')), [amountText]);
+
+  useEffect(() => {
+    if (!editingExpense) {
+      if (currentUser) {
+        setPaidBy(currentUser.id);
+        setParticipantIds([currentUser.id]);
+      }
+      if (categories[0]) {
+        setCategoryId(categories[0].id);
+      }
+      return;
+    }
+
+    setType(editingExpense.type);
+    setSplitMethod('DIRECT');
+    setTitle(editingExpense.title);
+    setAmountText(String(editingExpense.amountKRW));
+    setCategoryId(editingExpense.categoryId);
+    setDate(editingExpense.date);
+    setPaidBy(editingExpense.paidBy);
+    setParticipantIds(editingExpense.shares.map((share) => share.userId));
+    setMemo(editingExpense.memo ?? '');
+    setDirectAmounts(Object.fromEntries(editingExpense.shares.map((share) => [share.userId, String(share.shareAmountKRW)])));
+  }, [categories, currentUser, editingExpense]);
 
   const toggleType = (nextType: ExpenseType) => {
     setType(nextType);
@@ -46,41 +72,60 @@ export const ExpenseFormScreen = () => {
       return;
     }
     setParticipantIds((current) => (current.includes(userId) ? current.filter((id) => id !== userId) : [...current, userId]));
+    setResetWarningAcknowledged(false);
+  };
+
+  const buildInput = (): CreateExpenseInput => {
+    if (!currentUser) {
+      throw new Error('현재 사용자를 불러오는 중입니다.');
+    }
+
+    const baseInput: CreateExpenseInput = {
+      title,
+      amountKRW,
+      categoryId,
+      date,
+      paidBy: type === 'PERSONAL' ? currentUser.id : paidBy,
+      type,
+      context: type === 'PERSONAL' ? 'DAILY' : 'MEETING',
+      memo,
+      participantIds: type === 'PERSONAL' ? [currentUser.id] : participantIds,
+      splitMethod: type === 'PERSONAL' ? 'EQUAL' : splitMethod,
+    };
+
+    return type === 'SHARED' && splitMethod === 'DIRECT'
+      ? {
+          ...baseInput,
+          directShares: participantIds.map((userId) => ({
+            userId,
+            shareAmountKRW: Number((directAmounts[userId] ?? '').replace(/[^0-9]/g, '')),
+          })),
+        }
+      : baseInput;
   };
 
   const submit = async () => {
     if (!currentUser) {
-      setError('mock current user를 불러오는 중입니다.');
+      setError('현재 사용자를 불러오는 중입니다.');
       return;
     }
 
     try {
       setError(null);
-      const baseInput: CreateExpenseInput = {
-        title,
-        amountKRW,
-        categoryId,
-        date,
-        paidBy: type === 'PERSONAL' ? currentUser.id : paidBy,
-        type,
-        context: type === 'PERSONAL' ? 'DAILY' : 'MEETING',
-        memo,
-        participantIds: type === 'PERSONAL' ? [currentUser.id] : participantIds,
-        splitMethod: type === 'PERSONAL' ? 'EQUAL' : splitMethod,
-      };
-
-      const input: CreateExpenseInput =
-        type === 'SHARED' && splitMethod === 'DIRECT'
-          ? {
-              ...baseInput,
-              directShares: participantIds.map((userId) => ({
-                userId,
-                shareAmountKRW: Number((directAmounts[userId] ?? '').replace(/[^0-9]/g, '')),
-              })),
-            }
-          : baseInput;
-
-      await createExpense(input);
+      const input = buildInput();
+      if (editingExpense) {
+        const updateInput: UpdateExpenseInput = { ...input, expenseId: editingExpense.id };
+        const resetsSettlement = isFinancialExpenseEdit(editingExpense, editingExpense.shares, updateInput, currentUser.id);
+        const hasSettlement = editingExpense.shares.some((share) => share.settledAmountKRW > 0 && share.userId !== editingExpense.paidBy);
+        if (resetsSettlement && hasSettlement && !resetWarningAcknowledged) {
+          setResetWarningAcknowledged(true);
+          setError('금액/결제자/부담자 변경은 기존 정산 상태를 초기화합니다. 계속하려면 저장을 한 번 더 눌러 주세요.');
+          return;
+        }
+        await updateExpense(updateInput);
+      } else {
+        await createExpense(input);
+      }
       navigation.goBack();
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : '저장에 실패했습니다.');
@@ -89,7 +134,9 @@ export const ExpenseFormScreen = () => {
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.container}>
-      <Text style={styles.title}>지출 추가</Text>
+      <Text style={styles.title}>{isEditMode ? '지출 수정' : '지출 추가'}</Text>
+
+      {isEditMode && !editingExpense ? <Text style={styles.error}>수정할 지출을 찾을 수 없습니다.</Text> : null}
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
@@ -102,7 +149,7 @@ export const ExpenseFormScreen = () => {
         </Pressable>
       </View>
 
-      <TextInput style={styles.input} value={amountText} onChangeText={setAmountText} keyboardType="number-pad" placeholder="금액 (KRW 정수)" />
+      <TextInput style={styles.input} value={amountText} onChangeText={(value) => { setAmountText(value); setResetWarningAcknowledged(false); }} keyboardType="number-pad" placeholder="금액 (KRW 정수)" />
       <TextInput style={styles.input} value={title} onChangeText={setTitle} placeholder="제목 또는 메모" />
       <TextInput style={styles.input} value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" />
       <TextInput style={styles.input} value={memo} onChangeText={setMemo} placeholder="메모 (선택)" />
@@ -124,7 +171,7 @@ export const ExpenseFormScreen = () => {
             <Text style={styles.sectionTitle}>결제자</Text>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
               {users.map((user) => (
-                <Pressable key={user.id} style={[styles.chip, paidBy === user.id ? styles.chipSelected : undefined]} onPress={() => setPaidBy(user.id)}>
+                <Pressable key={user.id} style={[styles.chip, paidBy === user.id ? styles.chipSelected : undefined]} onPress={() => { setPaidBy(user.id); setResetWarningAcknowledged(false); }}>
                   <Text style={styles.chipText}>{user.name}</Text>
                 </Pressable>
               ))}
@@ -145,10 +192,10 @@ export const ExpenseFormScreen = () => {
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>분할 방식</Text>
             <View style={styles.row}>
-              <Pressable style={[styles.secondaryButton, splitMethod === 'EQUAL' ? styles.selectedButton : undefined, { flex: 1 }]} onPress={() => setSplitMethod('EQUAL')}>
+              <Pressable style={[styles.secondaryButton, splitMethod === 'EQUAL' ? styles.selectedButton : undefined, { flex: 1 }]} onPress={() => { setSplitMethod('EQUAL'); setResetWarningAcknowledged(false); }}>
                 <Text style={styles.secondaryButtonText}>균등 분할</Text>
               </Pressable>
-              <Pressable style={[styles.secondaryButton, splitMethod === 'DIRECT' ? styles.selectedButton : undefined, { flex: 1 }]} onPress={() => setSplitMethod('DIRECT')}>
+              <Pressable style={[styles.secondaryButton, splitMethod === 'DIRECT' ? styles.selectedButton : undefined, { flex: 1 }]} onPress={() => { setSplitMethod('DIRECT'); setResetWarningAcknowledged(false); }}>
                 <Text style={styles.secondaryButtonText}>직접 입력</Text>
               </Pressable>
             </View>
@@ -160,7 +207,10 @@ export const ExpenseFormScreen = () => {
                       key={userId}
                       style={styles.input}
                       value={directAmounts[userId] ?? ''}
-                      onChangeText={(value) => setDirectAmounts((current) => ({ ...current, [userId]: value }))}
+                      onChangeText={(value) => {
+                        setDirectAmounts((current) => ({ ...current, [userId]: value }));
+                        setResetWarningAcknowledged(false);
+                      }}
                       keyboardType="number-pad"
                       placeholder={`${user?.name ?? '부담자'} 부담액`}
                     />
@@ -171,8 +221,8 @@ export const ExpenseFormScreen = () => {
         </>
       ) : null}
 
-      <Pressable style={styles.button} onPress={submit}>
-        <Text style={styles.buttonText}>저장</Text>
+      <Pressable style={[styles.button, isEditMode && !editingExpense ? styles.disabledButton : undefined]} onPress={submit} disabled={isEditMode && !editingExpense}>
+        <Text style={styles.buttonText}>{isEditMode ? '수정 저장' : '저장'}</Text>
       </Pressable>
     </ScrollView>
   );
