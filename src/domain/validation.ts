@@ -20,7 +20,7 @@ const assertSameUserSet = (left: string[], right: string[], label: string): void
   const sameSize = leftSet.size === rightSet.size;
   const sameMembers = left.every((userId) => rightSet.has(userId));
   if (!sameSize || !sameMembers) {
-    throw new Error(`${label} must exactly match participants.`);
+    throw new Error(`${label} must exactly match burden owners.`);
   }
 };
 
@@ -44,8 +44,11 @@ export const validateCreateExpenseInput = (input: CreateExpenseInput): void => {
   if (input.type === 'PERSONAL' && input.participantIds.length !== 1) {
     throw new Error('PERSONAL expense must have exactly one participant.');
   }
-  if (input.type === 'SHARED' && input.participantIds.length < 2) {
-    throw new Error('SHARED expense must have at least two participants.');
+  if (input.type === 'SHARED' && input.participantIds.length < 1) {
+    throw new Error('SHARED expense must have at least one burden owner.');
+  }
+  if (input.type === 'SHARED' && input.participantIds.length === 1 && input.participantIds[0] === input.paidBy) {
+    throw new Error('SHARED expense with only the payer as burden owner should be PERSONAL.');
   }
   if (input.splitMethod === 'DIRECT') {
     if (!input.directShares || input.directShares.length === 0) {

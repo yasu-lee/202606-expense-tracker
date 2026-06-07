@@ -121,7 +121,7 @@ export const ExpenseFormScreen = () => {
       {type === 'SHARED' ? (
         <>
           <View style={styles.card}>
-            <Text style={styles.sectionTitle}>결제자 paidBy</Text>
+            <Text style={styles.sectionTitle}>결제자</Text>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
               {users.map((user) => (
                 <Pressable key={user.id} style={[styles.chip, paidBy === user.id ? styles.chipSelected : undefined]} onPress={() => setPaidBy(user.id)}>
@@ -132,7 +132,7 @@ export const ExpenseFormScreen = () => {
           </View>
 
           <View style={styles.card}>
-            <Text style={styles.sectionTitle}>참여자</Text>
+            <Text style={styles.sectionTitle}>부담자</Text>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
               {users.map((user) => (
                 <Pressable key={user.id} style={[styles.chip, participantIds.includes(user.id) ? styles.chipSelected : undefined]} onPress={() => toggleParticipant(user.id)}>
@@ -162,11 +162,11 @@ export const ExpenseFormScreen = () => {
                       value={directAmounts[userId] ?? ''}
                       onChangeText={(value) => setDirectAmounts((current) => ({ ...current, [userId]: value }))}
                       keyboardType="number-pad"
-                      placeholder={`${user?.name ?? userId} 부담액`}
+                      placeholder={`${user?.name ?? '부담자'} 부담액`}
                     />
                   );
                 })
-              : <Text style={styles.label}>나머지는 참여자 stable order 기준으로 앞 사람부터 1원씩 배분합니다.</Text>}
+              : <Text style={styles.label}>나머지는 선택한 부담자 순서대로 앞 사람부터 1원씩 배분합니다.</Text>}
           </View>
         </>
       ) : null}

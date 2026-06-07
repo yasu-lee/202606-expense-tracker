@@ -93,7 +93,46 @@ describe('split functions', () => {
         { userId: me, shareAmountKRW: 5000 },
         { userId: friendB, shareAmountKRW: 5000 },
       ],
-    })).toThrow(/exactly match participants/);
+    })).toThrow(/exactly match burden owners/);
+  });
+
+  it('allows SHARED expense with one burden owner when paidBy differs from participant', () => {
+    expect(() => validateCreateExpenseInput({
+      title: '대신 결제',
+      amountKRW: 5600,
+      categoryId: 'cafe',
+      date: '2026-06-06',
+      paidBy: friendA,
+      type: 'SHARED',
+      participantIds: [me],
+      splitMethod: 'EQUAL',
+    })).not.toThrow();
+  });
+
+  it('rejects SHARED expense without burden owners', () => {
+    expect(() => validateCreateExpenseInput({
+      title: '부담자 없는 공유 지출',
+      amountKRW: 5600,
+      categoryId: 'cafe',
+      date: '2026-06-06',
+      paidBy: friendA,
+      type: 'SHARED',
+      participantIds: [],
+      splitMethod: 'EQUAL',
+    })).toThrow(/at least one burden owner/);
+  });
+
+  it('rejects SHARED expense with only the payer as burden owner', () => {
+    expect(() => validateCreateExpenseInput({
+      title: '개인 지출이어야 하는 공유 지출',
+      amountKRW: 5600,
+      categoryId: 'cafe',
+      date: '2026-06-06',
+      paidBy: friendA,
+      type: 'SHARED',
+      participantIds: [friendA],
+      splitMethod: 'EQUAL',
+    })).toThrow(/should be PERSONAL/);
   });
 });
 
@@ -136,6 +175,30 @@ describe('expense creation', () => {
 
     expect(expenses).toHaveLength(1);
     expect(shares.map((item) => item.shareAmountKRW)).toEqual([3334, 3334, 3333]);
+  });
+
+  it('creates SHARED expense with one burden owner when payer differs', async () => {
+    const repository = new MockExpenseRepository({ expenses: [], shares: [] });
+    const result = await repository.createExpenseWithShares({
+      title: '대신 결제한 커피',
+      amountKRW: 5600,
+      categoryId: 'cafe',
+      date: '2026-06-06',
+      paidBy: 'user-minji',
+      type: 'SHARED',
+      context: 'MEETING',
+      participantIds: ['user-jisoo'],
+      splitMethod: 'EQUAL',
+    });
+
+    expect(result.expense).toMatchObject({ type: 'SHARED', paidBy: 'user-minji' });
+    expect(result.shares).toHaveLength(1);
+    expect(result.shares[0]).toMatchObject({
+      userId: 'user-jisoo',
+      shareAmountKRW: 5600,
+      settlementStatus: 'PENDING',
+      settledAmountKRW: 0,
+    });
   });
 
 });
@@ -195,5 +258,53 @@ describe('monthly calculations', () => {
       { categoryId: 'food', amountKRW: 20000 },
       { categoryId: 'transport', amountKRW: 6000 },
     ]);
+  });
+
+  it('counts receivable when current user paid for another single burden owner', () => {
+    const expenses = [expense({
+      id: 'coffee-for-minji',
+      title: '민지 커피',
+      amountKRW: 5600,
+      paidBy: me,
+      type: 'SHARED',
+      context: 'MEETING',
+    })];
+    const shares = [share({
+      id: 'coffee-minji-share',
+      expenseId: 'coffee-for-minji',
+      userId: friendA,
+      shareAmountKRW: 5600,
+    })];
+
+    expect(buildMonthlySummary(expenses, shares, me, month)).toMatchObject({
+      totalPaidKRW: 5600,
+      actualSpentKRW: 0,
+      receivableKRW: 5600,
+      payableKRW: 0,
+    });
+  });
+
+  it('counts payable when another user paid for current user as single burden owner', () => {
+    const expenses = [expense({
+      id: 'coffee-for-me',
+      title: '내 커피',
+      amountKRW: 5600,
+      paidBy: friendA,
+      type: 'SHARED',
+      context: 'MEETING',
+    })];
+    const shares = [share({
+      id: 'coffee-me-share',
+      expenseId: 'coffee-for-me',
+      userId: me,
+      shareAmountKRW: 5600,
+    })];
+
+    expect(buildMonthlySummary(expenses, shares, me, month)).toMatchObject({
+      totalPaidKRW: 0,
+      actualSpentKRW: 5600,
+      receivableKRW: 0,
+      payableKRW: 5600,
+    });
   });
 });
