@@ -364,6 +364,53 @@ describe('expense updates and deletion', () => {
     expect(updated.shares.find((item) => item.userId === 'user-jisoo')).toMatchObject({ settlementStatus: 'PENDING', settledAmountKRW: 0 });
   });
 
+  it('rejects shared expense updates when direct shares do not match the total amount', async () => {
+    const repository = new MockExpenseRepository({ expenses: [], shares: [] });
+    const created = await repository.createExpenseWithShares({
+      title: '직접 분할 커피',
+      amountKRW: 10000,
+      categoryId: 'cafe',
+      date: '2026-06-06',
+      paidBy: 'user-minji',
+      type: 'SHARED',
+      context: 'MEETING',
+      participantIds: ['user-minji', 'user-jisoo'],
+      splitMethod: 'DIRECT',
+      directShares: [
+        { userId: 'user-minji', shareAmountKRW: 4000 },
+        { userId: 'user-jisoo', shareAmountKRW: 6000 },
+      ],
+    });
+
+    await expect(repository.updateExpenseWithShares({
+      expenseId: created.expense.id,
+      title: '직접 분할 커피 수정',
+      amountKRW: 12000,
+      categoryId: 'cafe',
+      date: '2026-06-06',
+      paidBy: 'user-minji',
+      type: 'SHARED',
+      context: 'MEETING',
+      participantIds: ['user-minji', 'user-jisoo'],
+      splitMethod: 'DIRECT',
+      directShares: [
+        { userId: 'user-minji', shareAmountKRW: 5000 },
+        { userId: 'user-jisoo', shareAmountKRW: 6000 },
+      ],
+    })).rejects.toThrow(/must equal expense amount/);
+
+    const expenses = await repository.listExpensesByMonth(month);
+    const unchangedExpense = expenses.find((item) => item.id === created.expense.id);
+    const shares = await repository.listSharesByExpenseIds([created.expense.id]);
+    const shareAmountsByUserId = Object.fromEntries(shares.map((item) => [item.userId, item.shareAmountKRW]));
+
+    expect(unchangedExpense).toMatchObject({ title: '직접 분할 커피', amountKRW: 10000 });
+    expect(shareAmountsByUserId).toEqual({
+      'user-jisoo': 6000,
+      'user-minji': 4000,
+    });
+  });
+
   it('preserves settlement for metadata-only updates', async () => {
     const repository = new MockExpenseRepository({ expenses: [], shares: [] });
     const created = await repository.createExpenseWithShares({
